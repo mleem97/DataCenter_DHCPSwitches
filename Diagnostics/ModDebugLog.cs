@@ -9,19 +9,72 @@ namespace DHCPSwitches;
 /// Append-only log in the game install folder (directory containing the <c>_Data</c> folder) for field debugging.
 /// Create an empty file <c>DHCPSwitches-trace.flag</c> in that same folder to enable verbose step traces
 /// (<c>[trace:…]</c> lines) for ping routing, cable checks, and IOPS reachability.
+/// IPAM UI diagnostics (IOPS toolbar, OnGUI mouse) go to <c>DHCPSwitches-ipam.log</c> when <c>DHCPSwitches-ipam.flag</c>
+/// is present — see <see cref="IpamDebugLog"/>.
 /// </summary>
 internal static class ModDebugLog
 {
     private static readonly object Sync = new();
     private static string _path;
+    private static string _ipamPath;
     private static bool _initTried;
+    private static bool _ipamInitTried;
+    private static bool _ipamSessionBannerWritten;
     private static DateTime _traceCacheUntilUtc;
     private static bool _traceCached;
+    private static DateTime _ipamFlagCacheUntilUtc;
+    private static bool _ipamFlagCached;
     private static readonly Dictionary<int, (float Time, string Reason)> IopsDenyThrottle = new();
     private static readonly Dictionary<int, float> IopsAllowThrottle = new();
 
     /// <summary>Full path after <see cref="Bootstrap"/>; may be null if logging could not be initialized.</summary>
     internal static string DiagnosticLogPath => _path;
+
+    /// <summary>Append-only IPAM diagnostics next to the game <c>_Data</c> folder when <c>DHCPSwitches-ipam.flag</c> exists there.</summary>
+    internal static string IpamDiagnosticLogPath => _ipamPath;
+
+    /// <summary>Checked every ~2s; create empty <c>DHCPSwitches-ipam.flag</c> beside the log to enable <see cref="WriteIpam"/>.</summary>
+    internal static bool IsIpamFileLogEnabled
+    {
+        get
+        {
+            var now = DateTime.UtcNow;
+            if (now < _ipamFlagCacheUntilUtc)
+            {
+                return _ipamFlagCached;
+            }
+
+            _ipamFlagCacheUntilUtc = now.AddSeconds(2);
+            try
+            {
+                Bootstrap();
+                if (string.IsNullOrEmpty(_path))
+                {
+                    _ipamFlagCached = false;
+                    return false;
+                }
+
+                var dir = Path.GetDirectoryName(_path);
+                if (string.IsNullOrEmpty(dir))
+                {
+                    _ipamFlagCached = false;
+                    return false;
+                }
+
+                _ipamFlagCached = File.Exists(Path.Combine(dir, "DHCPSwitches-ipam.flag"));
+                if (_ipamFlagCached)
+                {
+                    BootstrapIpamPath();
+                }
+            }
+            catch
+            {
+                _ipamFlagCached = false;
+            }
+
+            return _ipamFlagCached;
+        }
+    }
 
     internal static void Bootstrap()
     {
@@ -49,6 +102,68 @@ internal static class ModDebugLog
             catch
             {
                 _path = null;
+            }
+        }
+    }
+
+    private static void BootstrapIpamPath()
+    {
+        lock (Sync)
+        {
+            if (_ipamInitTried)
+            {
+                return;
+            }
+
+            _ipamInitTried = true;
+            try
+            {
+                var dir = Path.GetDirectoryName(Application.dataPath);
+                if (string.IsNullOrEmpty(dir))
+                {
+                    return;
+                }
+
+                _ipamPath = Path.Combine(dir, "DHCPSwitches-ipam.log");
+            }
+            catch
+            {
+                _ipamPath = null;
+            }
+        }
+    }
+
+    /// <summary>Writes to <see cref="IpamDiagnosticLogPath"/> when <see cref="IsIpamFileLogEnabled"/> is true.</summary>
+    internal static void WriteIpam(string message)
+    {
+        if (string.IsNullOrEmpty(message) || !IsIpamFileLogEnabled)
+        {
+            return;
+        }
+
+        BootstrapIpamPath();
+        if (string.IsNullOrEmpty(_ipamPath))
+        {
+            return;
+        }
+
+        var line = $"{DateTime.UtcNow:HH:mm:ss.fff} {message}\r\n";
+        lock (Sync)
+        {
+            try
+            {
+                if (!_ipamSessionBannerWritten)
+                {
+                    _ipamSessionBannerWritten = true;
+                    File.AppendAllText(
+                        _ipamPath,
+                        $"\r\n======== DHCPSwitches IPAM debug {DateTime.UtcNow:u} ========\r\n");
+                }
+
+                File.AppendAllText(_ipamPath, line);
+            }
+            catch
+            {
             }
         }
     }

@@ -39,10 +39,16 @@ public class DHCPSwitchesMod : MelonMod
             InputSystemUiCancelPatches.TryApply(harmony);
 
             LoggerInstance.Msg(
-                "DHCP Switches & IPAM loaded. I = IPAM, Ctrl+L = assign all servers, Ctrl+D = toggle lock (debug). Click the rack switch/router menu (red) button to open CLI, or use IPAM → device → Open CLI.");
+                "DHCP Switches & IPAM loaded. F1 = IPAM, Ctrl+L = assign all servers, title bar DHCP/IPAM toggles or Ctrl+D = lock (debug). Rack switch/router red menu = CLI, or IPAM → device → Open CLI.");
             if (!string.IsNullOrEmpty(ModDebugLog.DiagnosticLogPath))
             {
                 LoggerInstance.Msg("DHCPSwitches diagnostic file: " + ModDebugLog.DiagnosticLogPath);
+            }
+
+            if (ModDebugLog.IsIpamFileLogEnabled && !string.IsNullOrEmpty(ModDebugLog.IpamDiagnosticLogPath))
+            {
+                ModDebugLog.WriteIpam("Mod loaded (DHCPSwitches-ipam.flag is present).");
+                LoggerInstance.Msg("DHCPSwitches IPAM diagnostic file: " + ModDebugLog.IpamDiagnosticLogPath);
             }
         }
         catch (System.Exception ex)
@@ -64,17 +70,50 @@ public class DHCPSwitchesMod : MelonMod
 
     public override void OnUpdate()
     {
+        // Melon OnUpdate runs before most Unity behaviours — sync uGUI blocker early so pause menus do not eat the first click under IPAM.
+        UiRaycastBlocker.SetBlocking(IPAMOverlay.IsVisible || DeviceTerminalOverlay.IsVisible);
+
+        // Run before default Unity script order so F1 / Ctrl+L are handled before many game scripts read the same keys.
+        var kb = Keyboard.current;
+        if (kb != null)
+        {
+            var cliOpen = DeviceTerminalOverlay.IsVisible;
+
+            if (!cliOpen && kb.f1Key.wasPressedThisFrame)
+            {
+                IPAMOverlay.NotifyF1ToggleHandledThisFrame();
+                IPAMOverlay.IsVisible = !IPAMOverlay.IsVisible;
+            }
+
+            if (!cliOpen && kb.leftCtrlKey.isPressed && kb.lKey.wasPressedThisFrame)
+            {
+                DHCPManager.AssignAllServers();
+            }
+
+            if (!cliOpen)
+            {
+                LicenseManager.HandleDebugUnlock();
+            }
+
+            if (!cliOpen)
+            {
+                RackSwitchCliHook.TryHandlePhysicalConsoleClick();
+            }
+        }
+
         var anyOverlay = IPAMOverlay.IsVisible || DeviceTerminalOverlay.IsVisible;
         if (!anyOverlay)
         {
             return;
         }
 
-        if (DeviceTerminalOverlay.IsVisible)
+        // IPAM uses F1 (not I) and does not suspend PlayerInput — only the CLI needs full lock + legacy axis reset.
+        if (!DeviceTerminalOverlay.IsVisible)
         {
-            DeviceTerminalOverlay.PumpInputSystemEscapeSinkForCli();
+            return;
         }
 
+        DeviceTerminalOverlay.PumpInputSystemEscapeSinkForCli();
         GameInputSuppression.RefreshWhileActive();
         LegacyInputAxes.TryReset();
     }
@@ -257,52 +296,32 @@ public class DHCPSwitchesBehaviour : MonoBehaviour
             DeviceTerminalOverlay.TickCliInput();
         }
 
-        var kb = Keyboard.current;
-        if (kb != null)
-        {
-            var cliOpen = DeviceTerminalOverlay.IsVisible;
-
-            if (!cliOpen && kb.iKey.wasPressedThisFrame)
-            {
-                // I is also the game's Inventory binding (see InputController UI actions in Assembly-CSharp).
-                // Disable PlayerInput before toggling so inventory does not open under IPAM (freeze/crash).
-                if (!IPAMOverlay.IsVisible)
-                {
-                    GameInputSuppression.SetSuppressed(true);
-                }
-
-                IPAMOverlay.IsVisible = !IPAMOverlay.IsVisible;
-            }
-
-            if (!cliOpen && kb.leftCtrlKey.isPressed && kb.lKey.wasPressedThisFrame)
-            {
-                DHCPManager.AssignAllServers();
-            }
-
-            if (!cliOpen)
-            {
-                LicenseManager.HandleDebugUnlock();
-            }
-
-            if (!cliOpen)
-            {
-                RackSwitchCliHook.TryHandlePhysicalConsoleClick();
-            }
-        }
-
         var anyOverlay = IPAMOverlay.IsVisible || DeviceTerminalOverlay.IsVisible;
         UiRaycastBlocker.SetBlocking(anyOverlay);
-        GameInputSuppression.SetSuppressed(anyOverlay);
+        GameInputSuppression.SetSuppressed(DeviceTerminalOverlay.IsVisible);
 
         if (IPAMOverlay.IsVisible)
         {
             IPAMOverlay.TickDeviceListCache();
+            IPAMOverlay.TickInputSystemIopsToolbarClick();
+            IPAMOverlay.TickIopsCalculatorInputSystem();
         }
+    }
+
+    private void LateUpdate()
+    {
+        var anyOverlay = IPAMOverlay.IsVisible || DeviceTerminalOverlay.IsVisible;
+        IpamMenuOcclusion.Tick(anyOverlay);
     }
 
     private void OnGUI()
     {
+        IPAMOverlay.PumpImGuiInputRecovery();
         IPAMOverlay.Draw();
         DeviceTerminalOverlay.Draw();
+        if (!IPAMOverlay.IsVisible && !DeviceTerminalOverlay.IsVisible)
+        {
+            IPAMOverlay.PumpImGuiInputRecovery();
+        }
     }
 }

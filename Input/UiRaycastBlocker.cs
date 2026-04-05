@@ -21,6 +21,13 @@ internal static class UiRaycastBlocker
 
         if (_root != null)
         {
+            // Must stay above the game's pause / system Overlay canvases (they were drawing over IMGUI IPAM).
+            var cv = _root.GetComponent<Canvas>();
+            if (cv != null)
+            {
+                cv.sortingOrder = 2_000_000;
+            }
+
             _root.SetActive(block);
         }
     }
@@ -44,7 +51,7 @@ internal static class UiRaycastBlocker
 
         var canvas = _root.AddComponent<Canvas>();
         canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-        canvas.sortingOrder = 32760;
+        canvas.sortingOrder = 2_000_000;
         canvas.overrideSorting = true;
 
         var scaler = _root.AddComponent<CanvasScaler>();

@@ -40,6 +40,7 @@ The project focuses on:
 ## Repository Structure
 
 - **`docs/SOURCE_LAYOUT.md`** — folder-by-folder map of all C# sources
+- **`StreamingAssets.Mods/DataCenter_Router/`** — passive shop `config.json` template for a dedicated **router** item (copy into `Data Center_Data/StreamingAssets/Mods/`; add mesh/textures from your game files)
 - **`Core/`** — MelonLoader entry (`Main.cs`, `MelonModInfo.cs`, …)
 - **`Networking/`** — DHCP, reachability/L3, subnets, `RouteMath`, device classification
 - **`Ipam/`** — IPAM overlay (`IPAMOverlay.cs`), `LicenseManager`

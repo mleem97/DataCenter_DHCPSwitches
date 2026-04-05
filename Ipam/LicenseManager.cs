@@ -3,16 +3,36 @@ using UnityEngine.InputSystem;
 namespace DHCPSwitches;
 
 /// <summary>
-/// Feature gates for DHCP / IPAM. Default: enabled. Ctrl+D toggles (for testing locked state).
+/// Feature gates for DHCP / IPAM. Default: both enabled. Title-bar toggles or Ctrl+D (syncs both) for testing locked state.
 /// Later: hook into ComputerShop / save unlock GUIDs (see DHCPSwitchesMod constants).
 /// </summary>
 internal static class LicenseManager
 {
-    private static bool _simulateLocked;
+    private static bool _simulateDhcpLocked;
+    private static bool _simulateIpamLocked;
 
-    internal static bool IsDHCPUnlocked => !_simulateLocked;
-    internal static bool IsIPAMUnlocked => !_simulateLocked;
+    internal static bool IsDHCPUnlocked => !_simulateDhcpLocked;
+    internal static bool IsIPAMUnlocked => !_simulateIpamLocked;
 
+    internal static void ToggleDhcpUnlock()
+    {
+        _simulateDhcpLocked = !_simulateDhcpLocked;
+        ModLogging.Msg(
+            _simulateDhcpLocked
+                ? "DHCP locked (bulk assign, DHCP auto, fill-empty)."
+                : "DHCP unlocked.");
+    }
+
+    internal static void ToggleIpamUnlock()
+    {
+        _simulateIpamLocked = !_simulateIpamLocked;
+        ModLogging.Msg(
+            _simulateIpamLocked
+                ? "IPAM locked (tables, IP editor, nav)."
+                : "IPAM unlocked.");
+    }
+
+    /// <summary>Ctrl+D: flip both locks together (legacy debug shortcut).</summary>
     internal static void HandleDebugUnlock()
     {
         var kb = Keyboard.current;
@@ -26,9 +46,12 @@ internal static class LicenseManager
             return;
         }
 
-        _simulateLocked = !_simulateLocked;
-        ModLogging.Msg(_simulateLocked
-            ? "Debug: DHCP/IPAM locked (Ctrl+D again to unlock)."
-            : "Debug: DHCP/IPAM unlocked.");
+        var next = !_simulateDhcpLocked;
+        _simulateDhcpLocked = next;
+        _simulateIpamLocked = next;
+        ModLogging.Msg(
+            next
+                ? "Debug: DHCP + IPAM locked (Ctrl+D or title bar to unlock)."
+                : "Debug: DHCP + IPAM unlocked.");
     }
 }

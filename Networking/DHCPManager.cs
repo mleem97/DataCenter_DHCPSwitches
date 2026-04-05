@@ -32,6 +32,9 @@ public static class DHCPManager
 
     public static void ClearLastSetIpError() => LastSetIpError = null;
 
+    /// <summary>IPAM customer-assign and batch actions can surface errors the same way as <see cref="SetServerIP"/>.</summary>
+    internal static void SetLastIpamError(string message) => LastSetIpError = message;
+
     public static void ToggleFlow()
     {
         IsFlowPaused = !IsFlowPaused;
@@ -63,7 +66,7 @@ public static class DHCPManager
                 continue;
             }
 
-            var newIp = GetNextFreeIpForServer(server);
+            var newIp = GetNextFreeIpForServer(server, servers);
             if (string.IsNullOrEmpty(newIp))
             {
                 continue;
@@ -83,6 +86,58 @@ public static class DHCPManager
         }
     }
 
+    /// <summary>Assign DHCP from the game's contract usable lists (and fallbacks) to every listed server; skips servers that already have an IP.</summary>
+    public static int AssignDhcpToServers(System.Collections.Generic.IEnumerable<Server> servers)
+    {
+        if (servers == null)
+        {
+            return 0;
+        }
+
+        if (!LicenseManager.IsDHCPUnlocked)
+        {
+            ModLogging.Warning("DHCP locked (toggle with Ctrl+D debug).");
+            return 0;
+        }
+
+        var allServers = UnityEngine.Object.FindObjectsOfType<Server>();
+        RebuildAssignedIpsFromScene(allServers);
+        var n = 0;
+        foreach (var server in servers)
+        {
+            if (server == null)
+            {
+                continue;
+            }
+
+            var ip = GetServerIP(server);
+            if (!string.IsNullOrWhiteSpace(ip) && ip != "0.0.0.0")
+            {
+                continue;
+            }
+
+            var newIp = GetNextFreeIpForServer(server, allServers);
+            if (string.IsNullOrEmpty(newIp))
+            {
+                continue;
+            }
+
+            if (SetServerIP(server, newIp, skipUsableListCheck: true))
+            {
+                AssignedIPs.Add(newIp);
+                n++;
+            }
+        }
+
+        if (n > 0)
+        {
+            ModLogging.Msg($"DHCP: {n} server(s) assigned.");
+            IPAMOverlay.InvalidateDeviceCache();
+        }
+
+        return n;
+    }
+
     /// <summary>Assign one free usable address to a single server (toolbar / per-row DHCP auto).</summary>
     public static bool AssignDhcpToSingleServer(Server server)
     {
@@ -97,8 +152,9 @@ public static class DHCPManager
             return false;
         }
 
-        RebuildAssignedIpsFromScene(UnityEngine.Object.FindObjectsOfType<Server>());
-        var newIp = GetNextFreeIpForServer(server);
+        var allServers = UnityEngine.Object.FindObjectsOfType<Server>();
+        RebuildAssignedIpsFromScene(allServers);
+        var newIp = GetNextFreeIpForServer(server, allServers);
         if (string.IsNullOrEmpty(newIp))
         {
             LastSetIpError = "No free address in the game's usable list for this server.";
@@ -245,14 +301,14 @@ public static class DHCPManager
         return last == 1;
     }
 
-    private static bool IsIpUsedByAnotherServer(Server self, string ip)
+    private static bool IsIpUsedByAnotherServer(Server self, string ip, Server[] allServers)
     {
-        if (string.IsNullOrWhiteSpace(ip))
+        if (string.IsNullOrWhiteSpace(ip) || allServers == null)
         {
             return false;
         }
 
-        foreach (var s in UnityEngine.Object.FindObjectsOfType<Server>())
+        foreach (var s in allServers)
         {
             if (s == null || s == self)
             {
@@ -269,7 +325,7 @@ public static class DHCPManager
         return false;
     }
 
-    private static string PickFromUsableArray(Il2CppStringArray usable, Server server)
+    private static string PickFromUsableArray(Il2CppStringArray usable, Server server, Server[] allServers)
     {
         if (usable == null)
         {
@@ -289,7 +345,7 @@ public static class DHCPManager
                 continue;
             }
 
-            if (IsIpUsedByAnotherServer(server, candidate))
+            if (IsIpUsedByAnotherServer(server, candidate, allServers))
             {
                 continue;
             }
@@ -305,7 +361,7 @@ public static class DHCPManager
         return null;
     }
 
-    private static string PickFromPrivateLan(string privateCidr, Server server)
+    private static string PickFromPrivateLan(string privateCidr, Server server, Server[] allServers)
     {
         foreach (var candidate in CustomerPrivateSubnetRegistry.EnumerateDhcpCandidates(privateCidr))
         {
@@ -319,7 +375,7 @@ public static class DHCPManager
                 continue;
             }
 
-            if (IsIpUsedByAnotherServer(server, candidate))
+            if (IsIpUsedByAnotherServer(server, candidate, allServers))
             {
                 continue;
             }
@@ -330,37 +386,21 @@ public static class DHCPManager
         return null;
     }
 
-    private static string GetNextFreeIpForServer(Server server)
+    private static string GetNextFreeIpForServer(Server server, Server[] allServersCache = null)
     {
         if (server == null)
         {
             return GetNextFreeLegacyPoolIp();
         }
 
-        if (CustomerPrivateSubnetRegistry.TryGetPrivateLanCidrForServer(server, out var privateCidr))
-        {
-            var fromPrivate = PickFromPrivateLan(privateCidr, server);
-            if (!string.IsNullOrEmpty(fromPrivate))
-            {
-                return fromPrivate;
-            }
-        }
+        var allServers = allServersCache ?? UnityEngine.Object.FindObjectsOfType<Server>();
 
-        if (DeviceConfigRegistry.TryGetPreferredDhcpCidrForServer(server, out var modCidr))
-        {
-            var usableMod = GameSubnetHelper.GetUsableIpsForSubnet(modCidr);
-            var pickedMod = PickFromUsableArray(usableMod, server);
-            if (!string.IsNullOrEmpty(pickedMod))
-            {
-                return pickedMod;
-            }
-        }
-
+        // Base game first: contract keypad / subnetsPerApp usable hosts for this customer.
         var cb = GameSubnetHelper.FindCustomerBaseForServer(server);
-        if (cb?.subnetsPerApp != null)
+        if (cb?.subnetsPerApp != null && cb.subnetsPerApp.Count > 0)
         {
-            var candidates = GameSubnetHelper.GetSubnetCidrDhcpCandidates(server, cb);
-            foreach (var cidr in candidates)
+            var tryOrder = GameSubnetHelper.BuildDhcpCidrTryOrder(server, cb, allServers);
+            foreach (var cidr in tryOrder)
             {
                 if (string.IsNullOrWhiteSpace(cidr))
                 {
@@ -368,7 +408,7 @@ public static class DHCPManager
                 }
 
                 var usable = GameSubnetHelper.GetUsableIpsForSubnet(cidr);
-                var picked = PickFromUsableArray(usable, server);
+                var picked = PickFromUsableArray(usable, server, allServers);
                 if (!string.IsNullOrEmpty(picked))
                 {
                     return picked;
@@ -378,6 +418,26 @@ public static class DHCPManager
             ModLogging.Warning(
                 "DHCP: no free address in any contract subnet list for this server (all may be in use or lists empty).");
             return null;
+        }
+
+        // Mod private /24 when customer contract is not bound yet (routed lab).
+        if (CustomerPrivateSubnetRegistry.TryGetPrivateLanCidrForServer(server, out var privateCidr))
+        {
+            var fromPrivate = PickFromPrivateLan(privateCidr, server, allServers);
+            if (!string.IsNullOrEmpty(fromPrivate))
+            {
+                return fromPrivate;
+            }
+        }
+
+        if (DeviceConfigRegistry.TryGetPreferredDhcpCidrForServer(server, out var modCidr))
+        {
+            var usableMod = GameSubnetHelper.GetUsableIpsForSubnet(modCidr);
+            var pickedMod = PickFromUsableArray(usableMod, server, allServers);
+            if (!string.IsNullOrEmpty(pickedMod))
+            {
+                return pickedMod;
+            }
         }
 
         return GetNextFreeLegacyPoolIp();
@@ -418,7 +478,7 @@ public static class DHCPManager
                 return;
             }
 
-            var autoIp = GetNextFreeIpForServer(server);
+            var autoIp = GetNextFreeIpForServer(server, null);
             if (string.IsNullOrEmpty(autoIp))
             {
                 return;

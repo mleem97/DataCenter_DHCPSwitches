@@ -15,8 +15,11 @@ public enum NetworkDeviceKind
 /// </summary>
 public static class NetworkDeviceClassifier
 {
-    public const string RouterModelToken1 = "4xSFP";
-    public const string RouterModelToken2 = "SFP28";
+    /// <summary>Explicit catalog marker for StreamingAssets shop items that must be L3 routers.</summary>
+    public const string RouterExplicitToken = "DCModRouter";
+
+    /// <summary>Substring match (case-insensitive). Stock "4 x SFP+/SFP28" <b>switch</b> must not match — use a dedicated router item name containing "Router".</summary>
+    private const string RouterNameToken = "router";
 
     private static readonly string[] ModelMemberNames =
     {
@@ -76,8 +79,12 @@ public static class NetworkDeviceClassifier
             return false;
         }
 
-        return text.IndexOf(RouterModelToken1, StringComparison.OrdinalIgnoreCase) >= 0
-               || text.IndexOf(RouterModelToken2, StringComparison.OrdinalIgnoreCase) >= 0;
+        if (text.IndexOf(RouterExplicitToken, StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return true;
+        }
+
+        return text.IndexOf(RouterNameToken, StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     private static string TryGetModelString(NetworkSwitch sw)

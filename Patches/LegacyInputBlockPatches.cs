@@ -16,12 +16,22 @@ internal static class LegacyInputBlockPatches
 
     private static bool ShouldBlock(KeyCode key)
     {
-        if (!DeviceTerminalOverlay.IsVisible)
+        var cli = DeviceTerminalOverlay.IsVisible;
+        var ipam = IPAMOverlay.IsVisible;
+
+        if (cli)
         {
-            return false;
+            return key is KeyCode.Escape or KeyCode.P or KeyCode.Tab;
         }
 
-        return key is KeyCode.Escape or KeyCode.P or KeyCode.Tab;
+        // F1 toggles IPAM; suppress legacy F1 while IPAM is open and on the frame we handled the toggle.
+        if (key == KeyCode.F1
+            && (ipam || Time.frameCount == IPAMOverlay.LegacyF1ConsumedFrame))
+        {
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>Project Input Manager often maps Escape to a virtual "Cancel" button; that path does not use <see cref="KeyCode"/>.</summary>

@@ -64,6 +64,10 @@ public static class DeviceTerminalOverlay
         _target = null;
         _session = null;
         _line = "";
+        IPAMOverlay.ScheduleImguiInputRecovery();
+        UiRaycastBlocker.SetBlocking(IPAMOverlay.IsVisible);
+        GameInputSuppression.SetSuppressed(false);
+        IpamMenuOcclusion.Tick(IPAMOverlay.IsVisible);
     }
 
     private static void ApplyEventSystemCliFocus()

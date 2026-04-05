@@ -12,7 +12,7 @@ The mod still links **`Assembly-CSharp.dll`** from MelonLoader’s interop folde
 ## Reverse-engineering summary
 
 - **Assembly:** game scripts live in `Assembly-CSharp.dll` (MelonLoader `Il2CppAssemblies` after codegen).
-- **`NetworkSwitch`:** used by the mod via Il2Cpp stubs; **model / SKU strings are not compiled into this repo**. At runtime, [`NetworkDeviceClassifier`](../Networking/NetworkDeviceClassifier.cs) probes common field/property names (`model`, `Model`, `switchModel`, `catalogName`, …) and falls back to `GameObject.name` containing `4xSFP` / `SFP28`.
+- **`NetworkSwitch`:** used by the mod via Il2Cpp stubs; **model / SKU strings are not compiled into this repo**. At runtime, [`NetworkDeviceClassifier`](../Networking/NetworkDeviceClassifier.cs) probes common field/property names (`model`, `Model`, `switchModel`, `catalogName`, …) and treats a device as a **router** only if that string or `GameObject.name` contains **`Router`** (case-insensitive) or the explicit token **`DCModRouter`**. The stock **4 x SFP+ / SFP28 switch** therefore stays **Layer 2**; use the StreamingAssets template router item (see `StreamingAssets.Mods/DataCenter_Router/`) for L3.
 - **`CustomerBase.AddAppPerformance`:** already patched by [`DHCPManager.FlowPausePatch`](../Networking/DHCPManager.cs) (flow pause). This is treated as the **primary choke point** for “application traffic / performance” ticks toward customers. Extended to consult [`ReachabilityService`](../Networking/ReachabilityService.cs) when **L3 enforce** is enabled in IPAM.
 - **Server context:** `AddAppPerformance` is currently patched with a **parameterless** `Prefix`; game signature appears to take **no parameters** (or only implicit `this`). Therefore reachability uses **all `Server` instances whose `GetCustomerID()` matches the `CustomerBase.customerID`** of `__instance` when deciding whether to allow the call.
 
@@ -30,7 +30,7 @@ The mod still links **`Assembly-CSharp.dll`** from MelonLoader’s interop folde
 ## Input: IPAM hotkey vs game Inventory
 
 - In **`InputController`** (generated / decompiled), **`UIActions.Inventory`** is an `InputAction` the game uses for inventory UI.
-- The mod toggles IPAM on **`Keyboard.current.iKey`** (see `DHCPSwitchesBehaviour.Update` in [`Main.cs`](../Core/Main.cs)). That is the **same physical key** as the default Inventory binding, so both could fire unless **`PlayerInput` is suspended** while IPAM or the CLI is open (`GameInputSuppression`).
+- IPAM toggles on **`Keyboard.current.f1Key`** (`DHCPSwitchesBehaviour.Update` in [`Main.cs`](../Core/Main.cs)). **`PlayerInput` is only suspended while the device CLI is open** (`GameInputSuppression`); IPAM stays overlay-only so gameplay / pause menus are not forced closed by the old **I**-key + inventory conflict.
 
 ## Future work
 

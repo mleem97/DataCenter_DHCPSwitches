@@ -16,6 +16,28 @@ public static class ReachabilityService
 {
     public static bool EnforcementEnabled { get; set; }
 
+    /// <summary>
+    /// One full-scene scan per frame — <see cref="AllowCustomerAddAppPerformance"/> used to call
+    /// <see cref="UnityEngine.Object.FindObjectsOfType{T}"/> many times per customer per tick (major hitch on power/cable changes).
+    /// </summary>
+    private static int _sceneDeviceCacheFrame = -1;
+
+    private static Server[] _sceneServers = Array.Empty<Server>();
+    private static NetworkSwitch[] _sceneSwitches = Array.Empty<NetworkSwitch>();
+
+    private static void EnsureSceneDeviceCache()
+    {
+        var f = Time.frameCount;
+        if (f == _sceneDeviceCacheFrame)
+        {
+            return;
+        }
+
+        _sceneDeviceCacheFrame = f;
+        _sceneServers = UnityEngine.Object.FindObjectsOfType<Server>();
+        _sceneSwitches = UnityEngine.Object.FindObjectsOfType<NetworkSwitch>();
+    }
+
     /// <param name="denyReason">When false and enforcement is on, a short diagnostic for <c>DHCPSwitches-debug.log</c>.</param>
     public static bool AllowCustomerAddAppPerformance(CustomerBase customer, out string denyReason)
     {
@@ -26,6 +48,8 @@ public static class ReachabilityService
             ModDebugLog.Trace("iops", $"customerID={cid} ALLOW (L3 enforcement off or customer null)");
             return true;
         }
+
+        EnsureSceneDeviceCache();
 
         ModDebugLog.Trace("iops", $"customerID={cid} AddAppPerformance gate: enforcement ON");
 
@@ -65,8 +89,7 @@ public static class ReachabilityService
             "iops",
             $"customerID={cid} step OK: private path (static={staticHit}, connected={connHit}, expected /24 {privateCidr ?? "?"})");
 
-        var servers = UnityEngine.Object.FindObjectsOfType<Server>();
-        foreach (var s in servers)
+        foreach (var s in _sceneServers)
         {
             if (s == null || s.GetCustomerID() != cid)
             {
@@ -121,12 +144,12 @@ public static class ReachabilityService
     /// <summary>Short summary of <see cref="Server"/> objects tied to <paramref name="customerId"/> for debug logs.</summary>
     internal static string SummarizeServersForCustomer(int customerId)
     {
-        var list = UnityEngine.Object.FindObjectsOfType<Server>();
+        EnsureSceneDeviceCache();
         var match = 0;
         var withIp = 0;
         var sb = new StringBuilder();
         var sampleCap = 6;
-        foreach (var s in list)
+        foreach (var s in _sceneServers)
         {
             if (s == null || s.GetCustomerID() != customerId)
             {
@@ -197,7 +220,7 @@ public static class ReachabilityService
             return false;
         }
 
-        foreach (var sw in UnityEngine.Object.FindObjectsOfType<NetworkSwitch>())
+        foreach (var sw in _sceneSwitches)
         {
             if (sw == null || NetworkDeviceClassifier.GetKind(sw) != NetworkDeviceKind.Router)
             {
@@ -302,7 +325,7 @@ public static class ReachabilityService
 
     private static bool ModHasL3Configuration()
     {
-        foreach (var sw in UnityEngine.Object.FindObjectsOfType<NetworkSwitch>())
+        foreach (var sw in _sceneSwitches)
         {
             if (sw == null || NetworkDeviceClassifier.GetKind(sw) != NetworkDeviceKind.Router)
             {
@@ -330,7 +353,7 @@ public static class ReachabilityService
     /// <summary>At least one router interface IP appears in the game's usable list for a non–RFC1918 contract CIDR on this customer.</summary>
     private static bool RouterHasWanAddressOnCustomerPublicContract(CustomerBase customer)
     {
-        foreach (var sw in UnityEngine.Object.FindObjectsOfType<NetworkSwitch>())
+        foreach (var sw in _sceneSwitches)
         {
             if (sw == null || NetworkDeviceClassifier.GetKind(sw) != NetworkDeviceKind.Router)
             {
@@ -388,7 +411,7 @@ public static class ReachabilityService
 
     private static bool AnyServerWithAssignedIp(int customerId)
     {
-        foreach (var s in UnityEngine.Object.FindObjectsOfType<Server>())
+        foreach (var s in _sceneServers)
         {
             if (s == null || s.GetCustomerID() != customerId)
             {
@@ -413,7 +436,7 @@ public static class ReachabilityService
         }
 
         var cid = customer.customerID;
-        foreach (var s in UnityEngine.Object.FindObjectsOfType<Server>())
+        foreach (var s in _sceneServers)
         {
             if (s == null || s.GetCustomerID() != cid)
             {
@@ -472,7 +495,7 @@ public static class ReachabilityService
 
     private static bool StaticRouteCoversNetwork(uint destinationNetwork, int destinationPrefixLen)
     {
-        foreach (var sw in UnityEngine.Object.FindObjectsOfType<NetworkSwitch>())
+        foreach (var sw in _sceneSwitches)
         {
             if (sw == null || NetworkDeviceClassifier.GetKind(sw) != NetworkDeviceKind.Router)
             {
@@ -507,7 +530,7 @@ public static class ReachabilityService
     /// </summary>
     private static bool ConnectedRouterCoversNetwork(uint destinationNetwork)
     {
-        foreach (var sw in UnityEngine.Object.FindObjectsOfType<NetworkSwitch>())
+        foreach (var sw in _sceneSwitches)
         {
             if (sw == null || NetworkDeviceClassifier.GetKind(sw) != NetworkDeviceKind.Router)
             {

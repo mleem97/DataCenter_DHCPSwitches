@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using UnityEngine;
@@ -131,6 +132,73 @@ internal static class GameSubnetHelper
         return false;
     }
 
+    /// <summary>
+    /// <c>customerID &gt;= 0</c>, at least one <c>subnetsPerApp</c> row (real contract), one <see cref="CustomerBase"/> per id (richest duplicate wins).
+    /// </summary>
+    internal static void FillActiveCustomersForPicker(List<CustomerBase> destination)
+    {
+        destination.Clear();
+        var arr = UnityEngine.Object.FindObjectsOfType<CustomerBase>();
+        if (arr == null)
+        {
+            return;
+        }
+
+        var best = new Dictionary<int, CustomerBase>(8);
+        foreach (var cb in arr)
+        {
+            if (cb == null || cb.customerID < 0)
+            {
+                continue;
+            }
+
+            if (SubnetMapEntryCount(cb) <= 0)
+            {
+                continue;
+            }
+
+            if (!best.TryGetValue(cb.customerID, out var incumbent) || PreferCustomerBaseForCache(cb, incumbent))
+            {
+                best[cb.customerID] = cb;
+            }
+        }
+
+        foreach (var kv in best)
+        {
+            destination.Add(kv.Value);
+        }
+
+        destination.Sort(CompareCustomerPickForPicker);
+    }
+
+    private static int CompareCustomerPickForPicker(CustomerBase a, CustomerBase b)
+    {
+        if (a == null && b == null)
+        {
+            return 0;
+        }
+
+        if (a == null)
+        {
+            return 1;
+        }
+
+        if (b == null)
+        {
+            return -1;
+        }
+
+        var c = a.customerID.CompareTo(b.customerID);
+        if (c != 0)
+        {
+            return c;
+        }
+
+        var na = a.customerItem != null ? a.customerItem.customerName : "";
+        var nb = b.customerItem != null ? b.customerItem.customerName : "";
+        return string.Compare(na ?? "", nb ?? "", StringComparison.OrdinalIgnoreCase);
+    }
+
     internal static CustomerBase FindCustomerBaseForServer(Server server)
     {
         if (server == null)
@@ -147,6 +215,12 @@ internal static class GameSubnetHelper
     internal static string GetCustomerDisplayName(Server server)
     {
         if (server == null)
+        {
+            return "—";
+        }
+
+        var ip = DHCPManager.GetServerIP(server);
+        if (string.IsNullOrWhiteSpace(ip) || ip == "0.0.0.0")
         {
             return "—";
         }
@@ -225,8 +299,9 @@ internal static class GameSubnetHelper
     }
 
     /// <summary>
-    /// Ordered CIDRs to try for DHCP: app-specific first, peer-inferred, then every subnet on the contract.
-    /// Avoids falling back to the mod legacy 192.168.1.x pool when <see cref="Server.appID"/> does not match map keys.
+    /// Ordered CIDRs to try for DHCP when <see cref="subnetsPerApp"/> has no row for <see cref="Server.appID"/>
+    /// or that subnet is full: same-<see cref="Server.appID"/> peers first, then every subnet on the contract.
+    /// Does <b>not</b> borrow subnets from other app IDs on the same customer (e.g. Yellow vs Blue product lines).
     /// </summary>
     internal static List<string> GetSubnetCidrDhcpCandidates(Server server, CustomerBase cb)
     {
@@ -278,36 +353,268 @@ internal static class GameSubnetHelper
             }
         }
 
-        // Same customer, any app — helps when appID does not match subnetsPerApp keys (clones / drift).
-        foreach (var peer in UnityEngine.Object.FindObjectsOfType<Server>())
-        {
-            if (peer == null || peer == server)
-            {
-                continue;
-            }
-
-            if (peer.GetCustomerID() != cid)
-            {
-                continue;
-            }
-
-            var pip = DHCPManager.GetServerIP(peer);
-            if (string.IsNullOrWhiteSpace(pip) || pip == "0.0.0.0")
-            {
-                continue;
-            }
-
-            if (TryFindCidrWhoseUsableListContainsIp(cb, pip, out var anyAppCidr))
-            {
-                TryAdd(anyAppCidr);
-            }
-        }
-
         foreach (var key in map.Keys)
         {
             TryAdd(map[key]);
         }
 
+        return result;
+    }
+
+    /// <summary>
+    /// Data Center often uses one <see cref="Server.appID"/> for multiple rack colors (Blue vs Yellow) under the same
+    /// <see cref="CustomerBase"/> — <c>subnetsPerApp[appID]</c> then points at only one row. We infer product line from
+    /// <c>Server.name</c> (e.g. <c>Server.Blue2_*</c> vs Yellow) and avoid DHCP in subnets already occupied by the other line.
+    /// </summary>
+    internal static string InferDhcpProductFamilyFromServerName(string objectName)
+    {
+        if (string.IsNullOrEmpty(objectName))
+        {
+            return null;
+        }
+
+        var n = objectName.ToLowerInvariant();
+        if (n.Contains("yellow"))
+        {
+            return "Yellow";
+        }
+
+        if (n.Contains("blue"))
+        {
+            return "Blue";
+        }
+
+        return null;
+    }
+
+    internal static string InferDhcpProductFamilyFromServer(Server server)
+    {
+        return server == null ? null : InferDhcpProductFamilyFromServerName(server.name);
+    }
+
+    private static int CidrFamilySortKey(string cidr, string family)
+    {
+        if (string.IsNullOrWhiteSpace(cidr) || !RouteMath.TryParsePrefix(cidr.Trim(), out var net, out _))
+        {
+            return 99;
+        }
+
+        var oct1 = (int)((net >> 24) & 255);
+        if (family == "Blue")
+        {
+            if (oct1 == 172)
+            {
+                return 0;
+            }
+
+            if (oct1 == 10)
+            {
+                return 1;
+            }
+
+            if (oct1 == 192)
+            {
+                return 2;
+            }
+
+            return 3;
+        }
+
+        if (family == "Yellow")
+        {
+            if (oct1 == 10)
+            {
+                return 0;
+            }
+
+            if (oct1 == 172)
+            {
+                return 1;
+            }
+
+            if (oct1 == 192)
+            {
+                return 2;
+            }
+
+            return 3;
+        }
+
+        return 0;
+    }
+
+    private static void SortCidrsForDhcpFamily(List<string> list, string family)
+    {
+        if (list == null || list.Count <= 1 || family == null)
+        {
+            return;
+        }
+
+        list.Sort(
+            (a, b) =>
+            {
+                var ka = CidrFamilySortKey(a, family);
+                var kb = CidrFamilySortKey(b, family);
+                var c = ka.CompareTo(kb);
+                return c != 0 ? c : string.Compare(a, b, StringComparison.OrdinalIgnoreCase);
+            });
+    }
+
+    /// <summary>
+    /// Single ordered list for DHCP: same-family subnets with peers first, then remaining contract CIDRs (excluding subnets
+    /// used by the other product line when names indicate Blue vs Yellow).
+    /// </summary>
+    internal static List<string> BuildDhcpCidrTryOrder(Server server, CustomerBase cb, Server[] allServers)
+    {
+        var result = new List<string>();
+        var map = cb?.subnetsPerApp;
+        if (map == null || map.Count == 0 || server == null)
+        {
+            return result;
+        }
+
+        allServers ??= Array.Empty<Server>();
+
+        var unique = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var key in map.Keys)
+        {
+            var v = map[key];
+            if (string.IsNullOrWhiteSpace(v) || !seen.Add(v))
+            {
+                continue;
+            }
+
+            unique.Add(v);
+        }
+
+        var fam = InferDhcpProductFamilyFromServer(server);
+        var myCid = server.GetCustomerID();
+        var otherFamilyCidrs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (fam != null)
+        {
+            foreach (var peer in allServers)
+            {
+                if (peer == null || peer == server)
+                {
+                    continue;
+                }
+
+                if (peer.GetCustomerID() != myCid)
+                {
+                    continue;
+                }
+
+                var pf = InferDhcpProductFamilyFromServer(peer);
+                if (pf == null || pf == fam)
+                {
+                    continue;
+                }
+
+                var pip = DHCPManager.GetServerIP(peer);
+                if (string.IsNullOrWhiteSpace(pip) || pip == "0.0.0.0")
+                {
+                    continue;
+                }
+
+                if (TryFindCidrWhoseUsableListContainsIp(cb, pip, out var cidr))
+                {
+                    otherFamilyCidrs.Add(cidr);
+                }
+            }
+        }
+
+        var eligible = new List<string>();
+        foreach (var c in unique)
+        {
+            if (otherFamilyCidrs.Count > 0 && otherFamilyCidrs.Contains(c))
+            {
+                continue;
+            }
+
+            eligible.Add(c);
+        }
+
+        if (eligible.Count == 0)
+        {
+            eligible.AddRange(unique);
+        }
+
+        var sameFamilySeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (fam != null)
+        {
+            foreach (var peer in allServers)
+            {
+                if (peer == null || peer == server)
+                {
+                    continue;
+                }
+
+                if (peer.GetCustomerID() != myCid)
+                {
+                    continue;
+                }
+
+                if (InferDhcpProductFamilyFromServer(peer) != fam)
+                {
+                    continue;
+                }
+
+                var pip = DHCPManager.GetServerIP(peer);
+                if (string.IsNullOrWhiteSpace(pip) || pip == "0.0.0.0")
+                {
+                    continue;
+                }
+
+                if (!TryFindCidrWhoseUsableListContainsIp(cb, pip, out var peerCidr))
+                {
+                    continue;
+                }
+
+                var inEligible = false;
+                for (var i = 0; i < eligible.Count; i++)
+                {
+                    if (string.Equals(eligible[i], peerCidr, StringComparison.OrdinalIgnoreCase))
+                    {
+                        inEligible = true;
+                        break;
+                    }
+                }
+
+                if (!inEligible)
+                {
+                    continue;
+                }
+
+                if (sameFamilySeen.Add(peerCidr))
+                {
+                    result.Add(peerCidr);
+                }
+            }
+        }
+
+        var rest = new List<string>();
+        foreach (var c in eligible)
+        {
+            var already = false;
+            for (var i = 0; i < result.Count; i++)
+            {
+                if (string.Equals(result[i], c, StringComparison.OrdinalIgnoreCase))
+                {
+                    already = true;
+                    break;
+                }
+            }
+
+            if (!already)
+            {
+                rest.Add(c);
+            }
+        }
+
+        SortCidrsForDhcpFamily(rest, fam);
+        result.AddRange(rest);
         return result;
     }
 
