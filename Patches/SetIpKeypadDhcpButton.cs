@@ -134,10 +134,10 @@ internal static class SetIpKeypadDhcpButton
             return;
         }
 
-        if (IPAMOverlay.IsVisible || DeviceTerminalOverlay.IsVisible)
+        if (IPAMOverlay.IsVisible)
         {
             ResetSpawnState();
-            DestroyDhcpButton("IPAM or CLI overlay open");
+            DestroyDhcpButton("IPAM overlay open");
             return;
         }
 
@@ -158,7 +158,7 @@ internal static class SetIpKeypadDhcpButton
         if (ModDebugLog.IsSetIpKeypadDhcpLogEnabled)
         {
             var st =
-                $"active={setIp.isActive},srv={sid},dhcpUnlock={LicenseManager.IsDHCPUnlocked},ipam={IPAMOverlay.IsVisible},cli={DeviceTerminalOverlay.IsVisible},spawnWait={Time.frameCount < _spawnNotBeforeFrame}";
+                $"active={setIp.isActive},srv={sid},dhcpUnlock={LicenseManager.IsDHCPUnlocked},ipam={IPAMOverlay.IsVisible},spawnWait={Time.frameCount < _spawnNotBeforeFrame}";
             if (st != _lastDhcpVerboseState)
             {
                 _lastDhcpVerboseState = st;

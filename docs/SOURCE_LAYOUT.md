@@ -5,12 +5,9 @@ All compilation units use the root namespace **`DHCPSwitches`** (see `DHCPSwitch
 | Folder | Role |
 |--------|------|
 | **`Core/`** | MelonLoader entry (`MelonMod`, `MelonModInfo`), injected `MonoBehaviour`, global usings, nullable shims. |
-| **`Networking/`** | DHCP + Harmony on `SetIP`, flow/`AddAppPerformance` gate, reachability (L3 enforce), game subnet/customer caches, private LAN registry, IPv4 helpers, router vs switch classification, `ServerCustomerBinding` (assign `customerID` via reflection). |
-| **`Routing/`** | Forwarding table resolution, static vs connected routes, L3 validation, switch-port / cable probes used by ping and routing. |
-| **`Cli/`** | Cisco-style terminal UI, autocomplete, rack hook to open CLI, terminal overlay + input pump. |
+| **`Networking/`** | DHCP + Harmony on `SetIP`, flow/`AddAppPerformance` gate, game subnet/customer caches, IPv4 helpers, `ServerCustomerBinding` (assign `customerID` via reflection). |
 | **`Config/`** | Per-device router/switch config model, registry, disk persistence, stable device IDs. |
 | **`Ipam/`** | IPAM IMGUI overlay (`IPAMOverlay` partials), device display reflection, menu occlusion, license toggles. |
-| **`Ping/`** | Ping target resolution, hop paths / visuals helpers, port–cable proximity scoring. |
 | **`Patches/`** | Standalone Harmony patches (legacy input block, UI cancel / Input System). |
 | **`Input/`** | Suspend game `PlayerInput` while overlays are open, legacy axis reset, IMGUI raycast blocking. |
 | **`Diagnostics/`** | File + Melon logging helpers (`DHCPSwitches-debug.log`, trace flag). |

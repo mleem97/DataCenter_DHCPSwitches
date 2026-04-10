@@ -347,7 +347,7 @@ public static partial class IPAMOverlay
             }
 
             BumpCell(0, DeviceInventoryReflection.GetDisplayName(sw));
-            BumpCell(2, NetworkDeviceClassifier.GetKind(sw) == NetworkDeviceKind.Router ? "Router" : "L2 switch");
+            BumpCell(2, "Switch");
             if (TryGetIpamEolString(sw, out var eolSw))
             {
                 BumpCell(4, eolSw);
@@ -364,7 +364,7 @@ public static partial class IPAMOverlay
             }
 
             BumpCell(0, DeviceInventoryReflection.GetDisplayName(server));
-            BumpCell(1, GameSubnetHelper.GetCustomerDisplayName(server));
+            BumpCell(1, GetCustomerDisplayName(server));
             BumpCell(2, "Server");
             var ip = DHCPManager.GetServerIP(server);
             BumpCell(3, string.IsNullOrWhiteSpace(ip) ? "—" : ip);
@@ -550,8 +550,8 @@ public static partial class IPAMOverlay
                 DeviceInventoryReflection.GetDisplayName(b),
                 StringComparison.OrdinalIgnoreCase),
             1 => string.Compare(
-                GameSubnetHelper.GetCustomerDisplayName(a),
-                GameSubnetHelper.GetCustomerDisplayName(b),
+                GetCustomerDisplayName(a),
+                GetCustomerDisplayName(b),
                 StringComparison.OrdinalIgnoreCase),
             2 => 0,
             3 => IpSortKey(DHCPManager.GetServerIP(a)).CompareTo(IpSortKey(DHCPManager.GetServerIP(b))),
@@ -658,6 +658,7 @@ public static partial class IPAMOverlay
 
         return _switchSortAscending ? cmp : -cmp;
     }
+
 
     private static void DrawSortableTableHeader(
         Rect r,

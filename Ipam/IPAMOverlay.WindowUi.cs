@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 namespace DHCPSwitches;
 
@@ -164,7 +166,6 @@ public static partial class IPAMOverlay
         var fitColsW = TW(_stMutedBtn, "Fit columns");
         var autoW = TW(_stPrimaryBtn, "Auto-DHCP (all servers)");
         var fillW = TW2(_stMutedBtn, "Fill empty: ON", "Fill empty: OFF");
-        var l3W = TW2(_stMutedBtn, "L3: ON", "L3: OFF");
         var pauseW = TW2(_stMutedBtn, "Resume flow", "Pause flow");
         var clrAlarmW = TW(_stMutedBtn, "Clear alarms");
         var techW = TW(_stMutedBtn, "Send technician");
@@ -195,18 +196,6 @@ public static partial class IPAMOverlay
         if (ImguiButtonOnce(new Rect(tx, btnRowY + ty, fillW, btnH), fillLabel, 17812, _stMutedBtn))
         {
             DHCPManager.EmptyIpAutoFillEnabled = !DHCPManager.EmptyIpAutoFillEnabled;
-        }
-
-        tx -= g + l3W;
-        var l3On = ReachabilityService.EnforcementEnabled;
-        if (ImguiButtonOnce(new Rect(tx, btnRowY + ty, l3W, btnH), l3On ? "L3: ON" : "L3: OFF", 14, _stMutedBtn))
-        {
-            ReachabilityService.EnforcementEnabled = !ReachabilityService.EnforcementEnabled;
-            ModDebugLog.Bootstrap();
-            ModDebugLog.WriteLine(
-                ReachabilityService.EnforcementEnabled
-                    ? "IPAM: L3 enforcement ON — AddAppPerformance will be checked against routers/DHCP (see IOPS BLOCKED/ALLOW lines when flow is running)."
-                    : "IPAM: L3 enforcement OFF — reachability gate skipped for AddAppPerformance (IOPS ALLOW still logs occasionally when flow runs).");
         }
 
         tx -= g + pauseW;
@@ -352,6 +341,12 @@ public static partial class IPAMOverlay
         }
 
         GUI.DragWindow(new Rect(0, 0, w, TitleBarH + ToolbarH));
+
+        // Consume any unhandled mouse down events to prevent them from passing through to underlying UI
+        if (Event.current.type == EventType.MouseDown && Event.current.button == 0)
+        {
+            Event.current.Use();
+        }
     }
     private static bool IsServerRowSelected(Server server)
     {
@@ -905,9 +900,7 @@ public static partial class IPAMOverlay
             var r = new Rect(x0, y, cardW, TableRowH);
             var nameRaw = sw != null ? DeviceInventoryReflection.GetDisplayName(sw) : "(removed)";
             var name = CellTextForCol(0, string.IsNullOrEmpty(nameRaw) ? "—" : nameRaw, cardW);
-            var roleRaw = sw != null
-                ? (NetworkDeviceClassifier.GetKind(sw) == NetworkDeviceKind.Router ? "Router" : "L2 switch")
-                : "—";
+            var roleRaw = "Switch";
             var role = CellTextForCol(2, roleRaw, cardW);
             var eolCol = TableEolCellDisplay(sw, cardW);
             if (TableDataRowClick(
@@ -978,7 +971,7 @@ public static partial class IPAMOverlay
             var ipRaw = string.IsNullOrWhiteSpace(ip) ? "—" : ip;
             var ipCol = CellTextForCol(3, ipRaw, cardW);
             var status = CellTextForCol(5, hasIp ? "Assigned" : "No address", cardW);
-            var cust = CellTextForCol(1, GameSubnetHelper.GetCustomerDisplayName(server), cardW);
+            var cust = CellTextForCol(1, GetCustomerDisplayName(server), cardW);
             var eolCol = TableEolCellDisplay(server, cardW);
             var dispRaw = DeviceInventoryReflection.GetDisplayName(server);
             var dispName = CellTextForCol(0, string.IsNullOrEmpty(dispRaw) ? "—" : dispRaw, cardW);
@@ -1085,7 +1078,7 @@ public static partial class IPAMOverlay
             var ipRaw = string.IsNullOrWhiteSpace(ip) ? "—" : ip;
             var ipCol = CellTextForCol(3, ipRaw, cardW);
             var status = CellTextForCol(5, hasIp ? "Assigned" : "No address", cardW);
-            var cust = CellTextForCol(1, GameSubnetHelper.GetCustomerDisplayName(server), cardW);
+            var cust = CellTextForCol(1, GetCustomerDisplayName(server), cardW);
             var eolCol = TableEolCellDisplay(server, cardW);
             var dispRaw = DeviceInventoryReflection.GetDisplayName(server);
             var dispName = CellTextForCol(0, string.IsNullOrEmpty(dispRaw) ? "—" : dispRaw, cardW);
@@ -1139,10 +1132,10 @@ public static partial class IPAMOverlay
             return "Choose customer…";
         }
 
-        var d0 = GameSubnetHelper.GetCustomerDisplayName(SelectedServersScratch[0]);
+        var d0 = GetCustomerDisplayName(SelectedServersScratch[0]);
         for (var i = 1; i < SelectedServersScratch.Count; i++)
         {
-            if (GameSubnetHelper.GetCustomerDisplayName(SelectedServersScratch[i]) != d0)
+            if (GetCustomerDisplayName(SelectedServersScratch[i]) != d0)
             {
                 return "(different customers in selection)";
             }
@@ -1165,27 +1158,30 @@ public static partial class IPAMOverlay
         }
 
         DHCPManager.ClearLastSetIpError();
-        var anyOk = false;
-        string lastErr = null;
-        foreach (var srv in SelectedServersScratch)
+        var assigned = 0;
+        var failed = 0;
+        foreach (var server in SelectedServersScratch)
         {
-            if (ServerCustomerBinding.TryBindServerToCustomer(srv, cb, out var assignErr))
+            if (server == null)
             {
-                anyOk = true;
+                continue;
+            }
+
+            if (TrySetServerCustomer(server, cb))
+            {
+                assigned++;
             }
             else
             {
-                lastErr = assignErr;
+                failed++;
             }
         }
 
-        if (anyOk)
+        if (assigned > 0)
         {
-            GameSubnetHelper.RefreshSceneCaches();
             InvalidateDeviceCache();
             UpdateAnchorServerForDetail();
-            if (SelectedServersScratch.Count > 1
-                && LicenseManager.IsDHCPUnlocked)
+            if (LicenseManager.IsDHCPUnlocked)
             {
                 DHCPManager.AssignDhcpToServers(SelectedServersScratch);
                 DHCPManager.ClearLastSetIpError();
@@ -1193,15 +1189,271 @@ public static partial class IPAMOverlay
             }
         }
 
-        if (!anyOk && !string.IsNullOrEmpty(lastErr))
+        if (failed > 0)
         {
-            DHCPManager.SetLastIpamError(lastErr);
+            DHCPManager.SetLastIpamError("Customer assignment failed for one or more selected servers.");
+        }
+    }
+
+    private static bool TrySetServerCustomer(Server server, CustomerBase customer)
+    {
+        if (server == null || customer == null)
+        {
+            return false;
+        }
+
+        if (!TryGetCustomerId(customer, out var customerId) || customerId < 0)
+        {
+            return false;
+        }
+
+        var serverType = server.GetType();
+        var methodNames = new[]
+        {
+            "SetCustomerID",
+            "SetCustomerId",
+            "SetCustomer",
+            "AssignCustomer",
+            "AssignCustomerID",
+            "AssignCustomerId",
+            "SetCustomerObject",
+            "SetCustomerBase"
+        };
+
+        foreach (var methodName in methodNames)
+        {
+            if (TryInvokeCustomerAssignmentMethod(server, serverType, methodName, customerId, customer))
+            {
+                return true;
+            }
+        }
+
+        foreach (var method in serverType.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (!method.Name.Contains("Customer", StringComparison.OrdinalIgnoreCase) || method.GetParameters().Length != 1)
+            {
+                continue;
+            }
+
+            if (TryInvokeCustomerAssignmentMethod(server, serverType, method.Name, customerId, customer))
+            {
+                return true;
+            }
+        }
+
+        var candidateNames = new[]
+        {
+            "customerID",
+            "customerId",
+            "CustomerID",
+            "CustomerId",
+            "customer",
+            "Customer",
+            "customerBase",
+            "CustomerBase"
+        };
+
+        foreach (var name in candidateNames)
+        {
+            var field = serverType.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (field != null)
+            {
+                if (TryWriteServerCustomerField(field, server, customerId, customer))
+                {
+                    return true;
+                }
+            }
+
+            var prop = serverType.GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (prop != null && prop.CanWrite)
+            {
+                if (TryWriteServerCustomerProperty(prop, server, customerId, customer))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryInvokeCustomerAssignmentMethod(Server server, Type serverType, string methodName, int customerId, CustomerBase customer)
+    {
+        var method = serverType.GetMethod(methodName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (method == null || method.GetParameters().Length != 1)
+        {
+            return false;
+        }
+
+        var parameter = method.GetParameters()[0];
+        var paramType = parameter.ParameterType;
+        try
+        {
+            if (paramType == typeof(int) || paramType == typeof(short) || paramType == typeof(long)
+                || paramType == typeof(byte) || paramType == typeof(sbyte)
+                || paramType == typeof(ushort) || paramType == typeof(uint) || paramType == typeof(ulong))
+            {
+                var value = Convert.ChangeType(customerId, paramType);
+                method.Invoke(server, new[] { value });
+                return true;
+            }
+
+            if (paramType.IsAssignableFrom(typeof(CustomerBase)))
+            {
+                method.Invoke(server, new object[] { customer });
+                return true;
+            }
+
+            if (paramType == typeof(object))
+            {
+                method.Invoke(server, new object[] { customer });
+                return true;
+            }
+        }
+        catch
+        {
+            // ignore invocation failures and keep looking
+        }
+
+        return false;
+    }
+
+    private static bool TryWriteServerCustomerField(FieldInfo field, Server server, int customerId, CustomerBase customer)
+    {
+        var fieldType = field.FieldType;
+        try
+        {
+            if (fieldType == typeof(int) || fieldType == typeof(short) || fieldType == typeof(long)
+                || fieldType == typeof(byte) || fieldType == typeof(sbyte)
+                || fieldType == typeof(ushort) || fieldType == typeof(uint) || fieldType == typeof(ulong))
+            {
+                field.SetValue(server, Convert.ChangeType(customerId, fieldType));
+                return true;
+            }
+
+            if (fieldType.IsAssignableFrom(typeof(CustomerBase)) || fieldType == typeof(object))
+            {
+                field.SetValue(server, customer);
+                return true;
+            }
+        }
+        catch
+        {
+        }
+
+        return false;
+    }
+
+    private static bool TryWriteServerCustomerProperty(PropertyInfo prop, Server server, int customerId, CustomerBase customer)
+    {
+        var propType = prop.PropertyType;
+        try
+        {
+            if (propType == typeof(int) || propType == typeof(short) || propType == typeof(long)
+                || propType == typeof(byte) || propType == typeof(sbyte)
+                || propType == typeof(ushort) || propType == typeof(uint) || propType == typeof(ulong))
+            {
+                prop.SetValue(server, Convert.ChangeType(customerId, propType));
+                return true;
+            }
+
+            if (propType.IsAssignableFrom(typeof(CustomerBase)) || propType == typeof(object))
+            {
+                prop.SetValue(server, customer);
+                return true;
+            }
+        }
+        catch
+        {
+        }
+
+        return false;
+    }
+
+    private static bool TryGetCustomerId(CustomerBase customer, out int customerId)
+    {
+        customerId = -1;
+        if (customer == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            customerId = customer.customerID;
+            return true;
+        }
+        catch
+        {
+        }
+
+        var customerType = customer.GetType();
+        var idField = customerType.GetField("customerID", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (idField != null && idField.FieldType == typeof(int))
+        {
+            customerId = (int)idField.GetValue(customer);
+            return true;
+        }
+
+        var idProperty = customerType.GetProperty("customerID", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (idProperty != null && idProperty.PropertyType == typeof(int))
+        {
+            customerId = (int)idProperty.GetValue(customer);
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string GetCustomerName(CustomerBase customer)
+    {
+        if (customer == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return customer.customerItem != null ? customer.customerItem.customerName : null;
+        }
+        catch
+        {
+            return null;
         }
     }
 
     private static void DrawCustomerDropdownAssign(float px, ref float py, float w)
     {
-        GameSubnetHelper.FillActiveCustomersForPicker(CustomerPickBuffer);
+        CustomerPickBuffer.Clear();
+        var uniqueCustomers = new Dictionary<int, CustomerBase>();
+        foreach (var cb in UnityEngine.Object.FindObjectsOfType<CustomerBase>())
+        {
+            if (cb == null)
+            {
+                continue;
+            }
+
+            if (!TryGetCustomerId(cb, out var cid) || cid < 0)
+            {
+                continue;
+            }
+
+            if (!uniqueCustomers.TryGetValue(cid, out var existing))
+            {
+                uniqueCustomers[cid] = cb;
+                continue;
+            }
+
+            var existingName = GetCustomerName(existing);
+            var currentName = GetCustomerName(cb);
+            if (string.IsNullOrWhiteSpace(existingName)
+                && !string.IsNullOrWhiteSpace(currentName))
+            {
+                uniqueCustomers[cid] = cb;
+            }
+        }
+
+        CustomerPickBuffer.AddRange(uniqueCustomers.Values);
         GUI.Label(new Rect(px, py + 3, 78, 22), "Customer:", _stFormLabel);
         var fieldW = Mathf.Min(w - px - 100, 520f);
         var dropBtnRect = new Rect(px + 82, py, fieldW, 24);
@@ -1324,15 +1576,9 @@ public static partial class IPAMOverlay
             py += 18f;
             var hasRealIp = !string.IsNullOrWhiteSpace(currentIp) && currentIp != "0.0.0.0";
             var cidStr = hasRealIp ? s0.GetCustomerID().ToString() : "—";
-            var modPriv = "—";
-            if (CustomerPrivateSubnetRegistry.TryGetPrivateLanCidrForServer(s0, out var privCidr))
-            {
-                modPriv = privCidr;
-            }
-
             GUI.Label(
                 new Rect(px, py, w - 32, 18),
-                $"Game customerID   {cidStr}    │    Mod private LAN   {modPriv}  (DHCP / reachability use this /24)",
+                $"Game customerID   {cidStr}",
                 _stMuted);
             py += 22f;
         }
@@ -1505,36 +1751,23 @@ public static partial class IPAMOverlay
         }
 
         var swOne = _selectedNetworkSwitch;
-        var kind = swOne != null ? NetworkDeviceClassifier.GetKind(swOne) : NetworkDeviceKind.Layer2Switch;
-        var role = kind == NetworkDeviceKind.Router ? "Router (L3)" : "Layer 2 switch";
-        var model = swOne != null ? NetworkDeviceClassifier.GetModelDisplay(swOne) : "";
-        var modelLine = string.IsNullOrEmpty(model) ? "" : $"    │    Model   {Trunc(model, 40)}";
+        var role = "Switch";
 
         GUI.Label(new Rect(px, py, w - 32, 18), "Edit object · Network device", _stSectionTitle);
         py += 20f;
         GUI.Label(
             new Rect(px, py, w - 32, 16),
-            $"Name   {Trunc(swOne != null ? DeviceInventoryReflection.GetDisplayName(swOne) : "", 72)}    │    Role   {role}{modelLine}",
+            $"Name   {Trunc(swOne != null ? DeviceInventoryReflection.GetDisplayName(swOne) : "", 72)}    │    Role   {role}",
             _stMuted);
         py += 20f;
 
         var ox = px;
-        if (ImguiButtonOnce(new Rect(ox, py, 120, 26), "Open CLI", 40, _stPrimaryBtn) && swOne != null)
-        {
-            DeviceTerminalOverlay.OpenFor(swOne);
-        }
-
-        ox += 128f;
         if (ImguiButtonOnce(new Rect(ox, py, 96, 26), "Deselect", 41, _stMutedBtn))
         {
             ClearSwitchSelection();
         }
 
         py += 30f;
-        GUI.Label(
-            new Rect(px, py, w - px - 24, 36),
-            "CLI: enable → configure terminal. Routers: Gi0/n, ip address, ip route. Switches: vlan, Fa0/n, switchport access vlan. Ctrl toggles; Shift+click range in this table.",
-            _stHint);
     }
 
     private static void DrawOctetEditor(ref int oct, ref float x, float y, int octetSlot)
@@ -1550,7 +1783,26 @@ public static partial class IPAMOverlay
         }
 
         x += 28f;
-        GUI.Label(new Rect(x, y + 2, 36, 22), oct.ToString(), _stOctetVal);
+        var labelRect = new Rect(x, y + 2, 36, 22);
+        if (_activeOctetSlot == octetSlot)
+        {
+            GUI.Box(labelRect, GUIContent.none);
+        }
+
+        GUI.Label(labelRect, oct.ToString(), _stOctetVal);
+        if (Event.current.type == EventType.MouseDown
+            && Event.current.button == 0
+            && labelRect.Contains(Event.current.mousePosition))
+        {
+            _activeOctetSlot = octetSlot;
+            Event.current.Use();
+        }
+
+        if (_activeOctetSlot == octetSlot && TryHandleOctetKeyboardEvent(Event.current))
+        {
+            Event.current.Use();
+        }
+
         x += 40f;
         if (OctetStepButton(new Rect(x, y, 26, 26), "+", plusHint))
         {
@@ -1601,5 +1853,101 @@ public static partial class IPAMOverlay
     private static string BuildIpFromOctets()
     {
         return $"{Mathf.Clamp(_oct0, 0, 255)}.{Mathf.Clamp(_oct1, 0, 255)}.{Mathf.Clamp(_oct2, 0, 255)}.{Mathf.Clamp(_oct3, 0, 255)}";
+    }
+
+    private static int GetOctetValue(int slot)
+    {
+        return slot switch
+        {
+            0 => _oct0,
+            1 => _oct1,
+            2 => _oct2,
+            3 => _oct3,
+            _ => 0,
+        };
+    }
+
+    private static void SetOctetValue(int slot, int value)
+    {
+        value = Mathf.Clamp(value, 0, 255);
+        switch (slot)
+        {
+            case 0: _oct0 = value; break;
+            case 1: _oct1 = value; break;
+            case 2: _oct2 = value; break;
+            case 3: _oct3 = value; break;
+        }
+    }
+
+    private static void BackspaceActiveOctet()
+    {
+        if (_activeOctetSlot < 0)
+        {
+            return;
+        }
+
+        var current = GetOctetValue(_activeOctetSlot);
+        SetOctetValue(_activeOctetSlot, current / 10);
+    }
+
+    private static void MoveActiveOctetFocusNext()
+    {
+        if (_activeOctetSlot < 0)
+        {
+            return;
+        }
+
+        _activeOctetSlot = Mathf.Min(3, _activeOctetSlot + 1);
+    }
+
+    private static void AppendDigitToActiveOctet(int digit)
+    {
+        if (_activeOctetSlot < 0)
+        {
+            return;
+        }
+
+        var current = GetOctetValue(_activeOctetSlot);
+        var next = current * 10 + digit;
+        if (next > 255)
+        {
+            return;
+        }
+
+        SetOctetValue(_activeOctetSlot, next);
+    }
+
+    private static bool TryHandleOctetKeyboardEvent(Event e)
+    {
+        if (_activeOctetSlot < 0 || e.type != EventType.KeyDown || Keyboard.current != null)
+        {
+            return false;
+        }
+
+        if (e.keyCode == KeyCode.Escape)
+        {
+            _activeOctetSlot = -1;
+            return true;
+        }
+
+        if (e.keyCode == KeyCode.Backspace)
+        {
+            BackspaceActiveOctet();
+            return true;
+        }
+
+        if (e.keyCode == KeyCode.Period || e.keyCode == KeyCode.Comma || e.character == '.' || e.character == ',')
+        {
+            MoveActiveOctetFocusNext();
+            return true;
+        }
+
+        if (e.character >= '0' && e.character <= '9')
+        {
+            AppendDigitToActiveOctet(e.character - '0');
+            return true;
+        }
+
+        return false;
     }
 }

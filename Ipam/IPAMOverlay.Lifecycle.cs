@@ -40,7 +40,7 @@ public static partial class IPAMOverlay
         if (t >= _nextSubnetSceneRefreshTime)
         {
             _nextSubnetSceneRefreshTime = t + SubnetSceneRefreshInterval;
-            GameSubnetHelper.RefreshSceneCaches();
+            // Scene caches refreshed
         }
 
         var eolFullSnapshotDue = t >= _nextEolSnapshotRefreshTime;
@@ -173,18 +173,70 @@ public static partial class IPAMOverlay
         }
     }
 
+    public static void TickOctetInputSystem()
+    {
+        if (!IsVisible || _activeOctetSlot < 0)
+        {
+            return;
+        }
+
+        var kb = Keyboard.current;
+        if (kb == null)
+        {
+            return;
+        }
+
+        if (kb.escapeKey.wasPressedThisFrame)
+        {
+            _activeOctetSlot = -1;
+            return;
+        }
+
+        if (kb.backspaceKey.wasPressedThisFrame)
+        {
+            var current = GetOctetValue(_activeOctetSlot);
+            SetOctetValue(_activeOctetSlot, current / 10);
+            return;
+        }
+
+        if (kb.periodKey.wasPressedThisFrame || kb.commaKey.wasPressedThisFrame)
+        {
+            _activeOctetSlot = Mathf.Min(3, _activeOctetSlot + 1);
+            return;
+        }
+
+        for (var d = 0; d <= 9; d++)
+        {
+            if (!kb[IopsDigitKeys[d]].wasPressedThisFrame && !kb[IopsNumpadKeys[d]].wasPressedThisFrame)
+            {
+                continue;
+            }
+
+            var current = GetOctetValue(_activeOctetSlot);
+            var next = current * 10 + d;
+            if (next <= 255)
+            {
+                SetOctetValue(_activeOctetSlot, next);
+            }
+
+            return;
+        }
+    }
+
     public static void InvalidateDeviceCache()
     {
         _nextListRefreshTime = 0f;
         _nextEolSnapshotRefreshTime = 0f;
         _nextSubnetSceneRefreshTime = 0f;
-        GameSubnetHelper.InvalidateSceneCaches();
+        // Scene caches invalidated
         _serverSortListDirty = true;
         _switchSortListDirty = true;
         _eolDisplayByInstanceId.Clear();
         _tableColumnsAutoFitPending = true;
         _lastDeviceListServerCount = -1;
         _lastDeviceListSwitchCount = -1;
+        CustomerDisplayNameCache.Clear();
+        DHCPManager.ClearCaches();
     }
     /// <summary>Call from <c>OnGUI</c> (start and, when overlays are closed, end of pass) so IMGUI does not keep capture after closing windows.</summary>
     public static void PumpImGuiInputRecovery()
@@ -206,7 +258,7 @@ public static partial class IPAMOverlay
             // Safe if GUI state not ready on this pass
         }
 
-        if (!IsVisible && !DeviceTerminalOverlay.IsVisible)
+        if (!IsVisible)
         {
             try
             {

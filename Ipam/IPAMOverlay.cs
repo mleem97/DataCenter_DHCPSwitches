@@ -70,15 +70,78 @@ public static partial class IPAMOverlay
                 _eolDisplayByInstanceId.Clear();
                 _ipamResizeDrag = false;
                 _columnGripWeightsStart = null;
+                _activeOctetSlot = -1;
                 BeginImGuiInputRecoveryBurst();
-                UiRaycastBlocker.SetBlocking(DeviceTerminalOverlay.IsVisible);
-                GameInputSuppression.SetSuppressed(DeviceTerminalOverlay.IsVisible);
-                IpamMenuOcclusion.Tick(DeviceTerminalOverlay.IsVisible);
+                UiRaycastBlocker.SetBlocking(false);
+                GameInputSuppression.SetSuppressed(false);
+                IpamMenuOcclusion.Tick(false);
                 ModDebugLog.WriteIpam($"IPAM close frame={Time.frameCount} recoverUntil={_imguiRecoverUntilExclusive}");
             }
 
             _visible = value;
         }
+    }
+
+    private static readonly Dictionary<int, string> CustomerDisplayNameCache = new();
+
+    internal static string GetCustomerDisplayName(Server server)
+    {
+        if (server == null)
+        {
+            return "Unknown";
+        }
+
+        var cid = server.GetCustomerID();
+        if (cid < 0)
+        {
+            return "—";
+        }
+
+        if (CustomerDisplayNameCache.TryGetValue(cid, out var cached))
+        {
+            return cached;
+        }
+
+        var name = TryGetCustomerDisplayNameById(cid);
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            var result = $"#{cid} {name}";
+            CustomerDisplayNameCache[cid] = result;
+            return result;
+        }
+
+        var fallback = $"Customer {cid}";
+        CustomerDisplayNameCache[cid] = fallback;
+        return fallback;
+    }
+
+    private static string TryGetCustomerDisplayNameById(int customerId)
+    {
+        if (customerId < 0)
+        {
+            return null;
+        }
+
+        foreach (var customer in UnityEngine.Object.FindObjectsOfType<CustomerBase>())
+        {
+            if (customer == null)
+            {
+                continue;
+            }
+
+            if (customer.customerID != customerId)
+            {
+                continue;
+            }
+
+            var name = GetCustomerName(customer);
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                return name.Trim();
+            }
+        }
+
+        return null;
     }
 
     private static Rect _windowRect = new(48f, 48f, 1200f, 640f);
@@ -90,7 +153,7 @@ public static partial class IPAMOverlay
 
     private static bool _ipamHadDetailSelectionLastFrame;
     private static Vector2 _scroll = Vector2.zero;
-    private static Server _selectedServer;
+    internal static Server _selectedServer;
     /// <summary>First selected switch in current sort order (detail panel / CLI); mirrors the switch instance-id set.</summary>
     private static NetworkSwitch _selectedNetworkSwitch;
     private static readonly HashSet<int> _selectedNetworkSwitchInstanceIds = new();
@@ -150,11 +213,11 @@ public static partial class IPAMOverlay
     private static float _nextListRefreshTime;
     /// <summary>Full EOL string recompute (reflection on every device) — separate from device list refresh to reduce load.</summary>
     private static float _nextEolSnapshotRefreshTime;
-    /// <summary>Customer/MGM <see cref="GameSubnetHelper.RefreshSceneCaches"/> — cheaper to run less often than the device list.</summary>
+    /// <summary>Customer/MGM caches — cheaper to run less often than the device list.</summary>
     private static float _nextSubnetSceneRefreshTime;
     private static float _cachedContentHeight = 320f;
     /// <summary>EOL strings from periodic snapshot; avoids reflection every IMGUI pass and while sorting.</summary>
-    private static readonly Dictionary<int, string> _eolDisplayByInstanceId = new();
+    internal static readonly Dictionary<int, string> _eolDisplayByInstanceId = new();
     private static readonly HashSet<int> IpamEolAliveScratch = new();
     private static readonly List<int> IpamEolRemoveScratch = new();
 
@@ -194,6 +257,7 @@ public static partial class IPAMOverlay
 
     /// <summary>Editable IP as four octets — GUI.TextField breaks under IL2CPP (TextEditor unstripping).</summary>
     private static int _oct0 = 192, _oct1 = 168, _oct2 = 1, _oct3 = 10;
+    private static int _activeOctetSlot = -1;
 
     private static bool _iopsCalculatorOpen;
     /// <summary>Digits only — typed via <see cref="EventType.KeyDown"/> (no TextField on IL2CPP).</summary>
@@ -280,6 +344,14 @@ public static partial class IPAMOverlay
     private static bool _pendingImguiStateRelease;
     /// <summary>Exclusive end frame for repeated IMGUI clears (multiple <c>OnGUI</c> passes / scroll views).</summary>
     private static int _imguiRecoverUntilExclusive;
+
+
+    public static void InvalidateCustomerCache()
+    {
+        CustomerDisplayNameCache.Clear();
+        _serverSortListDirty = true; // Forces the table to redraw
+    }
+
 
     public static void Draw()
     {
